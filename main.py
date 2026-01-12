@@ -11,8 +11,9 @@ from datetime import datetime, timedelta
 from flask import Flask
 from threading import Thread
 
-# --- CẤU HÌNH WEB SERVER ---
+# --- CẤU HÌNH WEB SERVER ĐỂ TREO RENDER ---
 app = Flask('')
+
 @app.route('/')
 def home():
     return "Bot đang chạy ổn định!"
@@ -29,9 +30,10 @@ API_TOKEN = '8253854117:AAGW3fnvJGcHqRS1ahTFmB6sNtwdJTaQe50'
 ADMIN_ID = 8481206726 
 LINK4M_API = '66334c6e06854a07b62bbd8d' 
 LAYMA_TOKEN = 'a3b8987dff9f812f7619296cabf79703'
-DATA_FILE = "database.json" 
+DATA_FILE = "database.json" # Tên file db đơn giản cho Render
 DIEM_THUONG = 0.5 
 
+# Sử dụng infinity_polling để fix lỗi ConnectionError
 bot = telebot.TeleBot(API_TOKEN)
 session = requests.Session()
 
@@ -138,10 +140,12 @@ def handle_menu(message):
     user = user_data[uid]
 
     if message.text == "🚀 Kiếm Kim Cương":
+        total_done = user.get('link4m_count', 0) + user.get('layma_count', 0)
         l4m = user.get('link4m_count', 0)
         layma = user.get('layma_count', 0)
-        total_done = l4m + layma
-        text = f"🎯 **CHỌN NHÀ CUNG CẤP**\n────────────────────\n📊 Nhiệm vụ hôm nay: {total_done}/3\n\nChọn nhà cung cấp bạn muốn làm nhiệm vụ:"
+        text = (f"🎯 **CHỌN NHÀ CUNG CẤP**\n────────────────────\n"
+                f"📊 Nhiệm vụ hôm nay: {total_done}/3\n\n"
+                f"Chọn nhà cung cấp bạn muốn làm nhiệm vụ:")
         m = types.InlineKeyboardMarkup()
         m.add(types.InlineKeyboardButton(f"LINK4M ({l4m}/2)", callback_data="task_link4m"),
               types.InlineKeyboardButton(f"LAYMA ({layma}/1)", callback_data="task_layma"))
@@ -155,18 +159,30 @@ def handle_menu(message):
                 f"🎯 Nhiệm vụ hôm nay: {total_done}/3")
         bot.send_message(uid, text, parse_mode="Markdown")
 
+    elif message.text == "🏆 Bảng Xếp Hạng":
+        top_30 = sorted(user_data.items(), key=lambda x: x[1].get('points', 0), reverse=True)[:30]
+        text = "🏆 **TOP 30 ĐẠI GIA KIM CƯƠNG**\n\n"
+        for i, (tid, info) in enumerate(top_30, 1):
+            text += f"{i}. {info['username']} - {info['points']:.1f} KC\n"
+        bot.send_message(uid, text, parse_mode="Markdown")
+
+    elif message.text == "💳 Rút Thưởng":
+        m = types.InlineKeyboardMarkup(row_width=1)
+        m.add(types.InlineKeyboardButton("💎 Gói 25.0 Kim Cương", callback_data="withdraw_25"),
+              types.InlineKeyboardButton("💎 Gói 51.0 Kim Cương", callback_data="withdraw_51"),
+              types.InlineKeyboardButton("💎 Gói 113.0 Kim Cương", callback_data="withdraw_113"))
+        bot.send_message(uid, f"💳 Số dư: {user['points']:.1f} KC\nChọn gói muốn rút:", reply_markup=m)
+
     elif message.text == "📚 Hướng Dẫn":
-        huong_dan_text = (
-            "📚 **HƯỚNG DẪN NHẬN KIM CƯƠNG**\n"
-            "──────────────────────\n"
-            "1️⃣ Bấm nút bên dưới\n"
-            "2️⃣ Vượt link rút gọn nhà cung cấp tương ứng\n"
-            "3️⃣ Sau đó để trang sẽ tự chuyển tới bot hoặc bấm \"Tiếp Tục Truy Cập Telegram?\" và bạn nhận kim cương\n\n"
-            "⚠️ **LƯU Ý QUAN TRỌNG:**\n"
-            "❌ Không dùng VPN/Proxy khi vượt link\n"
-            "❌ Không dùng công cụ/tool bypass link\n"
-            "❌ Hệ thống tự động kiểm tra, nếu vi phạm sẽ khóa tài khoản vĩnh viễn."
-        )
+        huong_dan_text = (f"📚 **HƯỚNG DẪN NHẬN KIM CƯƠNG**\n"
+                          f"──────────────────────\n"
+                          f"1️⃣ Bấm nút bên dưới\n"
+                          f"2️⃣ Vượt link rút gọn nhà cung cấp tương ứng\n"
+                          f"3️⃣ Sau đó để trang sẽ tự chuyển tới bot hoặc bấm \"Tiếp Tục Truy Cập Telegram?\" và bạn nhận kim cương\n\n"
+                          f"⚠️ **LƯU Ý QUAN TRỌNG:**\n"
+                          f"❌ Không dùng VPN/Proxy khi vượt link\n"
+                          f"❌ Không dùng công cụ/tool bypass link\n"
+                          f"❌ Hệ thống tự động kiểm tra, nếu vi phạm sẽ khóa tài khoản vĩnh viễn.")
         bot.send_message(uid, huong_dan_text, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
@@ -184,7 +200,11 @@ def callback_handler(call):
     if call.data.startswith("task_"):
         for tk, info in pending_tokens.items():
             if info['id'] == uid:
-                bot.send_message(uid, "⚠️ Bạn đang có một nhiệm vụ chưa hoàn thành! Vui lòng hoàn thành hoặc chờ.")
+                text_warn = ("⚠️ **Bạn đang có một nhiệm vụ chưa hoàn thành!**\n\n"
+                             "Hệ thống chỉ cho phép làm từng nhiệm vụ một. Nếu link lỗi hãy hủy.")
+                m_warn = types.InlineKeyboardMarkup()
+                m_warn.add(types.InlineKeyboardButton("❌ Hủy nhiệm vụ hiện tại", callback_data="clear_task"))
+                bot.edit_message_text(text_warn, uid, call.message.message_id, reply_markup=m_warn, parse_mode="Markdown")
                 return
         provider = call.data.split("_")[1]
         limit = 2 if provider == "link4m" else 1
@@ -195,16 +215,22 @@ def callback_handler(call):
         tk = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
         pending_tokens[tk] = {'id': uid, 'provider': provider, 'start_time': time.time()}
         short_url = get_short_link(f"https://t.me/ZeiusKCbot?start={tk}", provider)
-        task_text = (
-            f"🎯 **NHIỆM VỤ: {provider.upper()}**\n"
-            f"💰 Thưởng: {DIEM_THUONG} 💎\n──────────────────────\n"
-            "1️⃣ Bấm nút bên dưới để lấy link\n"
-            "2️⃣ Vượt link để nhận mã thưởng\n"
-            "3️⃣ Bot sẽ tự động cộng điểm khi bạn quay lại"
-        )
-        m = types.InlineKeyboardMarkup()
-        m.add(types.InlineKeyboardButton("🔗 BẮT ĐẦU NHIỆM VỤ", url=short_url))
+        task_no = "1/2" if provider == "link4m" else "2/2"
+        task_text = (f"🎯 **NHIỆM VỤ Số {task_no}**\n──────────────────────\n"
+                     f"🢂 Nhà cung cấp: {provider.upper()}\n"
+                     f"📊 Đã dùng: {current}/{limit}\n💰 Thưởng: {DIEM_THUONG} 💎\n"
+                     f"──────────────────────\n📋 **HƯỚNG DẪN:**\n"
+                     f"1️⃣ Bấm nút bên dưới\n2️⃣ Vượt link rút gọn {provider.upper()}\n"
+                     f"3️⃣ Sau đó để trang sẽ tự chuyển tới bot hoặc bấm \"Tiếp Tục Truy Cập Telegram?\" và bạn nhận kim cương")
+        m = types.InlineKeyboardMarkup(row_width=1)
+        m.add(types.InlineKeyboardButton("🔗 BẮT ĐẦU NHIỆM VỤ", url=short_url),
+              types.InlineKeyboardButton("❌ HỦY NHIỆM VỤ", callback_data="clear_task"))
         bot.edit_message_text(task_text, uid, call.message.message_id, reply_markup=m, parse_mode="Markdown")
+
+    elif call.data == "clear_task":
+        tokens_to_del = [tk for tk, info in pending_tokens.items() if info['id'] == uid]
+        for tk in tokens_to_del: del pending_tokens[tk]
+        bot.edit_message_text("♻️ Đã dọn nhiệm vụ cũ!", uid, call.message.message_id, reply_markup=None)
 
     elif call.data.startswith("withdraw_"):
         amt = float(call.data.split("_")[1])
@@ -212,11 +238,25 @@ def callback_handler(call):
             user['points'] = round(user['points'] - amt, 1)
             save_data()
             bot.send_message(uid, f"✅ Đơn rút {amt} KC đang xử lý.")
-            bot.send_message(ADMIN_ID, f"🔔 **ĐƠN RÚT**\nUser: {user['username']}\nGói: {amt} KC")
+            m_adm = types.InlineKeyboardMarkup()
+            m_adm.add(types.InlineKeyboardButton("✅ Duyệt", callback_data=f"adm_done_{uid}_{amt}"),
+                      types.InlineKeyboardButton("❌ Ban", callback_data=f"adm_ban_{uid}_{amt}"))
+            bot.send_message(ADMIN_ID, f"🔔 **ĐƠN RÚT**\nUser: {user['username']}\nGói: {amt} KC", reply_markup=m_adm)
         else:
             bot.answer_callback_query(call.id, "❌ Không đủ số dư!", show_alert=True)
+
+    elif call.data.startswith("adm_"):
+        if int(uid) != ADMIN_ID: return
+        _, action, target_uid, amount = call.data.split("_")
+        if action == "done":
+            bot.send_message(target_uid, f"✅ Đơn rút {amount} KC đã thành công!")
+            bot.edit_message_text(f"{call.message.text}\n✅ ĐÃ DUYỆT", ADMIN_ID, call.message.message_id, reply_markup=None)
+        elif action == "ban":
+            if target_uid not in blacklist: blacklist.append(str(target_uid))
+            save_data()
+            bot.edit_message_text(f"{call.message.text}\n❌ ĐÃ BAN", ADMIN_ID, call.message.message_id, reply_markup=None)
 
 if __name__ == "__main__":
     keep_alive()
     print("Bot đang khởi động...")
-    bot.infinity_polling(timeout=20, long_polling_timeout=10)
+    bot.infinity_polling(timeout=10, long_polling_timeout=5)
