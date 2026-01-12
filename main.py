@@ -8,15 +8,32 @@ import os
 import urllib.parse
 import time
 from datetime import datetime, timedelta
+from flask import Flask
+from threading import Thread
 
-# --- CẤU HÌNH ---
+# --- CẤU HÌNH WEB SERVER ĐỂ TREO RENDER ---
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot đang chạy ổn định!"
+
+def run():
+    app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+
+# --- CẤU HÌNH BOT ---
 API_TOKEN = '8253854117:AAGW3fnvJGcHqRS1ahTFmB6sNtwdJTaQe50'
 ADMIN_ID = 8481206726 
 LINK4M_API = '66334c6e06854a07b62bbd8d' 
 LAYMA_TOKEN = 'a3b8987dff9f812f7619296cabf79703'
-DATA_FILE = ".zeus_internal_db.dat" 
+DATA_FILE = "database.json" # Tên file db đơn giản cho Render
 DIEM_THUONG = 0.5 
 
+# Sử dụng infinity_polling để fix lỗi ConnectionError
 bot = telebot.TeleBot(API_TOKEN)
 session = requests.Session()
 
@@ -42,24 +59,21 @@ blacklist = db["blacklist"]
 pending_tokens = {} 
 last_click_time = {}
 
-# --- HÀM KIỂM TRA & RESET ---
+# --- HÀM HỆ THỐNG ---
 def check_and_reset_tasks(uid):
     if uid not in user_data: return
     user = user_data[uid]
     now = datetime.now()
-    
     if 'last_reset' not in user:
         user['last_reset'] = (now - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
         save_data()
         return
-
     last_reset_dt = datetime.strptime(user['last_reset'], "%Y-%m-%d %H:%M:%S")
     if now - last_reset_dt >= timedelta(hours=24):
         user['link4m_count'] = 0
         user['layma_count'] = 0
         save_data()
 
-# --- HÀM RÚT GỌN LINK ---
 def get_short_link(url, provider):
     try:
         encoded_url = urllib.parse.quote(url)
@@ -71,10 +85,8 @@ def get_short_link(url, provider):
             api_url = f"https://link4m.co/api-shorten/v2?api={LINK4M_API}&url={encoded_url}"
             res = session.get(api_url, timeout=10).json()
             return res.get('shortenedUrl', url)
-    except:
-        return url
+    except: return url
 
-# --- GIAO DIỆN MENU ---
 def main_menu():
     m = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     m.add("🚀 Kiếm Kim Cương", "👤 Tài Khoản",
@@ -84,51 +96,42 @@ def main_menu():
     m.add("🎯 Nhiệm vụ Đặc biệt")
     return m
 
-# --- LỆNH /START ---
+# --- HANDLERS ---
 @bot.message_handler(commands=['start'])
 def start(message):
     user_id = str(message.chat.id)
     if user_id in blacklist: return
-    
     if user_id not in user_data:
         user_data[user_id] = {
             'username': message.from_user.first_name or "Người dùng", 
-            'uid_game': 'Chưa đặt', 'points': 0.0, 
-            'total_earned': 0.0,
+            'uid_game': 'Chưa đặt', 'points': 0.0, 'total_earned': 0.0,
             'link4m_count': 0, 'layma_count': 0,
             'last_reset': (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
         }
         save_data()
-
     check_and_reset_tasks(user_id)
-
     args = message.text.split()
     if len(args) > 1:
         token = args[1]
         if token in pending_tokens:
             info = pending_tokens[token]
             if info['id'] == user_id:
-                # ANTI-CHEAT: Kiểm tra thời gian (dưới 15s là bypass)
                 elapsed = time.time() - info['start_time']
                 if elapsed < 15:
                     bot.send_message(user_id, "⚠️ **Thao tác quá nhanh!** Vui lòng không dùng tool bypass.")
                     return
-
                 provider = info['provider']
                 u = user_data[user_id]
                 u[f"{provider}_count"] = u.get(f"{provider}_count", 0) + 1
                 u['points'] = round(u.get('points', 0) + DIEM_THUONG, 1)
                 u['total_earned'] = round(u.get('total_earned', 0) + DIEM_THUONG, 1)
                 u['last_reset'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                
                 save_data()
                 del pending_tokens[token]
                 bot.send_message(user_id, f"✅ Chúc mừng! Bạn nhận được +{DIEM_THUONG} Kim Cương!", reply_markup=main_menu())
                 return
-
     bot.send_message(user_id, "🌟 **ZEUS BOT - KIM CƯƠNG MIỄN PHÍ**", reply_markup=main_menu())
 
-# --- XỬ LÝ MENU CHÍNH ---
 @bot.message_handler(func=lambda m: True)
 def handle_menu(message):
     uid = str(message.chat.id)
@@ -182,19 +185,15 @@ def handle_menu(message):
                           f"❌ Hệ thống tự động kiểm tra, nếu vi phạm sẽ khóa tài khoản vĩnh viễn.")
         bot.send_message(uid, huong_dan_text, parse_mode="Markdown")
 
-# --- XỬ LÝ CALLBACK ---
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     uid = str(call.message.chat.id)
-    
-    # Anti-Spam
     if int(uid) != ADMIN_ID:
         now = time.time()
         if uid in last_click_time and now - last_click_time[uid] < 1.2:
             bot.answer_callback_query(call.id, "⚠️ Đừng ấn quá nhanh!")
             return
         last_click_time[uid] = now
-
     check_and_reset_tasks(uid)
     user = user_data.get(uid)
 
@@ -202,39 +201,66 @@ def callback_handler(call):
         for tk, info in pending_tokens.items():
             if info['id'] == uid:
                 text_warn = ("⚠️ **Bạn đang có một nhiệm vụ chưa hoàn thành!**\n\n"
-                             "Hệ thống chỉ cho phép làm từng nhiệm vụ một. "
-                             "Nếu link bị lỗi, hãy nhấn nút dưới đây để hủy và nhận lại.")
+                             "Hệ thống chỉ cho phép làm từng nhiệm vụ một. Nếu link lỗi hãy hủy.")
                 m_warn = types.InlineKeyboardMarkup()
                 m_warn.add(types.InlineKeyboardButton("❌ Hủy nhiệm vụ hiện tại", callback_data="clear_task"))
                 bot.edit_message_text(text_warn, uid, call.message.message_id, reply_markup=m_warn, parse_mode="Markdown")
                 return
-
         provider = call.data.split("_")[1]
         limit = 2 if provider == "link4m" else 1
         current = user.get(f"{provider}_count", 0)
-
         if current >= limit:
-            last_dt = datetime.strptime(user['last_reset'], "%Y-%m-%d %H:%M:%S")
-            next_reset = last_dt + timedelta(hours=24)
-            bot.answer_callback_query(call.id, f"❌ Hết lượt {provider.upper()}!\nQuay lại lúc: {next_reset.strftime('%H:%M %d/%m')}", show_alert=True)
+            bot.answer_callback_query(call.id, "❌ Hết lượt hôm nay!", show_alert=True)
             return
-
         tk = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
         pending_tokens[tk] = {'id': uid, 'provider': provider, 'start_time': time.time()}
         short_url = get_short_link(f"https://t.me/ZeiusKCbot?start={tk}", provider)
-        
-        provider_name = provider.upper()
         task_no = "1/2" if provider == "link4m" else "2/2"
-        
-        task_text = (f"🎯 **NHIỆM VỤ Số {task_no}**\n"
-                     f"──────────────────────\n"
-                     f"🢂 Nhà cung cấp: {provider_name}\n"
-                     f"📊 Đã dùng {provider_name}: {current}/{limit}\n"
-                     f"💰 Phần thưởng: {DIEM_THUONG} 💎\n"
-                     f"──────────────────────\n"
-                     f"📋 **HƯỚNG DẪN:**\n"
-                     f"1️⃣ Bấm nút bên dưới\n"
-                     f"2️⃣ Vượt link rút gọn {provider_name}\n"
+        task_text = (f"🎯 **NHIỆM VỤ Số {task_no}**\n──────────────────────\n"
+                     f"🢂 Nhà cung cấp: {provider.upper()}\n"
+                     f"📊 Đã dùng: {current}/{limit}\n💰 Thưởng: {DIEM_THUONG} 💎\n"
+                     f"──────────────────────\n📋 **HƯỚNG DẪN:**\n"
+                     f"1️⃣ Bấm nút bên dưới\n2️⃣ Vượt link rút gọn {provider.upper()}\n"
+                     f"3️⃣ Sau đó để trang sẽ tự chuyển tới bot hoặc bấm \"Tiếp Tục Truy Cập Telegram?\" và bạn nhận kim cương")
+        m = types.InlineKeyboardMarkup(row_width=1)
+        m.add(types.InlineKeyboardButton("🔗 BẮT ĐẦU NHIỆM VỤ", url=short_url),
+              types.InlineKeyboardButton("❌ HỦY NHIỆM VỤ", callback_data="clear_task"))
+        bot.edit_message_text(task_text, uid, call.message.message_id, reply_markup=m, parse_mode="Markdown")
+
+    elif call.data == "clear_task":
+        tokens_to_del = [tk for tk, info in pending_tokens.items() if info['id'] == uid]
+        for tk in tokens_to_del: del pending_tokens[tk]
+        bot.edit_message_text("♻️ Đã dọn nhiệm vụ cũ!", uid, call.message.message_id, reply_markup=None)
+
+    elif call.data.startswith("withdraw_"):
+        amt = float(call.data.split("_")[1])
+        if user['points'] >= amt:
+            user['points'] = round(user['points'] - amt, 1)
+            save_data()
+            bot.send_message(uid, f"✅ Đơn rút {amt} KC đang xử lý.")
+            m_adm = types.InlineKeyboardMarkup()
+            m_adm.add(types.InlineKeyboardButton("✅ Duyệt", callback_data=f"adm_done_{uid}_{amt}"),
+                      types.InlineKeyboardButton("❌ Ban", callback_data=f"adm_ban_{uid}_{amt}"))
+            bot.send_message(ADMIN_ID, f"🔔 **ĐƠN RÚT**\nUser: {user['username']}\nGói: {amt} KC", reply_markup=m_adm)
+        else:
+            bot.answer_callback_query(call.id, "❌ Không đủ số dư!", show_alert=True)
+
+    elif call.data.startswith("adm_"):
+        if int(uid) != ADMIN_ID: return
+        _, action, target_uid, amount = call.data.split("_")
+        if action == "done":
+            bot.send_message(target_uid, f"✅ Đơn rút {amount} KC đã thành công!")
+            bot.edit_message_text(f"{call.message.text}\n✅ ĐÃ DUYỆT", ADMIN_ID, call.message.message_id, reply_markup=None)
+        elif action == "ban":
+            if target_uid not in blacklist: blacklist.append(str(target_uid))
+            save_data()
+            bot.edit_message_text(f"{call.message.text}\n❌ ĐÃ BAN", ADMIN_ID, call.message.message_id, reply_markup=None)
+
+if __name__ == "__main__":
+    keep_alive()
+    print("Bot đang khởi động...")
+    bot.infinity_polling(timeout=10, long_polling_timeout=5)
+f"2️⃣ Vượt link rút gọn {provider_name}\n"
                      f"3️⃣ Sau đó để trang sẽ tự chuyển tới bot hoặc bấm \"Tiếp Tục Truy Cập Telegram?\" và bạn nhận kim cương\n\n"
                      f"──────────────────────\n"
                      f"⚠️ **LƯU Ý:**\n"
